@@ -85,21 +85,22 @@ def enrich_from_detail(assessment):
             assessment["description"] = description
 
        
+
         duration = ""
 
-        # look for keywords around duration
-        keywords = ["assessment length", "time allowed", "minutes", "duration"]
+        for p in soup.find_all("p"):
+            text = p.get_text(" ", strip=True).lower()
 
-        for tag in soup.find_all(["li", "p", "span"]):
-            text = tag.get_text(" ", strip=True).lower()
-            if any(k in text for k in keywords):
-                match = re.search(r'(\d+)\s*(minute|min)', text)
+            if "approximate completion time" in text:
+                match = re.search(r'(\d+)', text)
                 if match:
                     duration = f"{match.group(1)} minutes"
                     break
 
         if duration:
             assessment["duration"] = duration
+            print(f" Found duration: {duration}")
+
 
     except Exception as e:
         print(f" Detail fetch failed: {assessment['url']}")
