@@ -52,24 +52,54 @@ def scrape_table(table):
     return assessments
 
 
-# -----------------------------
-# Fetch description + duration
-# -----------------------------
 def enrich_from_detail(assessment):
     try:
-        resp = requests.get(assessment["url"], headers=HEADERS, timeout=10)
+        resp = requests.get(assessment["url"], headers=HEADERS, timeout=15)
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Description
-        desc_div = soup.find("div", class_="product-description")
-        if desc_div:
-            assessment["description"] = desc_div.get_text(" ", strip=True)
+      
+        description = ""
 
-        # Duration (regex-based)
-        text = soup.get_text(" ", strip=True).lower()
-        match = re.search(r'(\d+)\s*(minute|min)', text)
-        if match:
-            assessment["duration"] = f"{match.group(1)} minutes"
+        for header in soup.find_all(["h2", "h3", "h4"]):
+            if "description" in header.get_text(strip=True).lower():
+                p = header.find_next("p")
+                if p:
+                    description = p.get_text(" ", strip=True)
+                    break
+
+        if not description:
+            for section in soup.find_all("section"):
+                text = section.get_text(" ", strip=True)
+                if len(text) > 150 and "assessment" in text.lower():
+                    description = text
+                    break
+
+        if not description:
+            for p in soup.find_all("p"):
+                text = p.get_text(" ", strip=True)
+                if len(text) > 150:
+                    description = text
+                    break
+
+        if description:
+            assessment["description"] = description
+
+       
+        duration = ""
+
+        # look for keywords around duration
+        keywords = ["assessment length", "time allowed", "minutes", "duration"]
+
+        for tag in soup.find_all(["li", "p", "span"]):
+            text = tag.get_text(" ", strip=True).lower()
+            if any(k in text for k in keywords):
+                match = re.search(r'(\d+)\s*(minute|min)', text)
+                if match:
+                    duration = f"{match.group(1)} minutes"
+                    break
+
+        if duration:
+            assessment["duration"] = duration
 
     except Exception as e:
         print(f" Detail fetch failed: {assessment['url']}")
@@ -77,10 +107,11 @@ def enrich_from_detail(assessment):
     return assessment
 
 
+
 def scrape_shl_catalog():
     all_assessments = []
 
-    print("🔍 Scraping Individual Test Solutions...")
+    print(" Scraping Individual Test Solutions...")
 
     # type=1 → Individual Test Solutions
     for start in range(0, 400, 12):
