@@ -1,8 +1,8 @@
 import pandas as pd
+from evaluation.url_normalizer import normalize_to_solution_url
 
 def extract_assessment_id(url):
-    if not isinstance(url, str):
-        return ""
+    url = normalize_to_solution_url(url)
     return url.split("product-catalog/view/")[-1].strip("/").lower()
 
 
@@ -13,8 +13,7 @@ def recall_at_k(true_urls, pred_urls, k=10):
     if not true_ids:
         return 0.0
 
-    hits = len(true_ids.intersection(pred_ids))
-    return hits / len(true_ids)
+    return len(true_ids.intersection(pred_ids)) / len(true_ids)
 
 
 true_df = pd.read_csv("data/Gen_AI_Dataset.csv")
@@ -23,12 +22,8 @@ pred_df = pd.read_csv("predictions.csv")
 recalls = []
 
 for q in true_df["Query"].unique():
-    gt_urls = true_df[true_df["Query"] == q]["Assessment_url"].tolist()
-    pred_urls = pred_df[pred_df["Query"] == q]["Assessment_url"].tolist()
+    gt = true_df[true_df["Query"] == q]["Assessment_url"].tolist()
+    pr = pred_df[pred_df["Query"] == q]["Assessment_url"].tolist()
+    recalls.append(recall_at_k(gt, pr, k=10))
 
-    r = recall_at_k(gt_urls, pred_urls, k=10)
-    recalls.append(r)
-
-mean_recall = sum(recalls) / len(recalls) if recalls else 0.0
-
-print("Mean Recall@10:", mean_recall)
+print("Mean Recall@10:", sum(recalls) / len(recalls))

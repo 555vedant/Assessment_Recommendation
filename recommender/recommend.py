@@ -4,7 +4,6 @@ from recommender.retrieve import retrieve
 from recommender.intent_llm import extract_intent
 import google.generativeai as genai
 import os
-import math
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -16,7 +15,7 @@ df = pd.read_csv("data/shl_catalog.csv").fillna("")
 def recommend(query, useLLM):
     intent = {}
 
-    # llM #1 — Intent extraction
+    # LLM #1 — Intent extraction 
     if useLLM:
         print("LLM1 use ----------------------------------------------------------------------------")
         try:
@@ -24,59 +23,75 @@ def recommend(query, useLLM):
         except Exception:
             intent = {}
 
+    if useLLM and intent:
+        augmented_query = query + " " + " ".join(
+            intent.get("hard_skills", []) +
+            intent.get("soft_skills", [])
+        )
+    else:
+        augmented_query = query   
 
-    # build augmented query for vector search
-    augmented_query = query
-    if intent:
-        augmented_query += " " + " ".join(intent.get("hard_skills", []))
-        augmented_query += " " + " ".join(intent.get("soft_skills", []))
+    # -----------------------------
+    candidate_indices = retrieve(augmented_query, k=30)
 
-    # vector DB retrieval
-    candidate_indices = retrieve(augmented_query, k=20)
+    candidates_df = df.iloc[candidate_indices].copy()
 
-    candidates = []
-    for idx in candidate_indices:
-        row = df.iloc[idx]
-        candidates.append({
-            "name": row["name"],
-            "url": row["url"],
-            "test_type": row["test_type"],
-            "description": row["description"]
-        })
+    # Duration constraint if mentioned
+    if "minute" in query.lower():
+        durations = (
+            candidates_df["duration"]
+            .str.extract(r"(\d+)")
+            .astype(float)[0]
+            .fillna(999)
+        )
+        candidates_df = candidates_df[durations <= 45]
 
-# LLM 2 — Reranking
-    selected_urls = [c["url"] for c in candidates[:5]]
+    # Balance hard & soft skills
+    hard = candidates_df[candidates_df["test_type"].str.contains("K", na=False)]
+    soft = candidates_df[candidates_df["test_type"].str.contains("P|C", na=False)]
 
-    if useLLM:
+    final_df = pd.concat([
+        hard.head(3),
+        soft.head(2)
+    ]).head(5)
+
+    # LLM #2 — Re-ranking (LIVE ONLY)
+    if useLLM and not final_df.empty:
         print("LLM2 use ----------------------------------------------------------------------------")
-        rerank_prompt = f"""
-        You are selecting the most relevant SHL assessments.
-
-        Hiring intent:
-        {json.dumps(intent, indent=2)}
-
-        Assessments:
-        {json.dumps(candidates, indent=2)}
-
-        Select the BEST 5 assessments.
-        Return ONLY a JSON array of URLs in ranked order.
-        """
-
-        model = genai.GenerativeModel("gemini-flash-latest")
-        response = model.generate_content(rerank_prompt)
-
         try:
+            llm_candidates = final_df[["name", "url", "description", "test_type"]].to_dict("records")
+
+            rerank_prompt = f"""
+                You are selecting the most relevant SHL assessments.
+
+                User query:
+                {query}
+
+                Assessments:
+                {json.dumps(llm_candidates, indent=2)}
+
+                Select the BEST 5 assessments.
+                Return ONLY a JSON array of assessment URLs in ranked order.
+                """
+
+            model = genai.GenerativeModel("gemini-flash-latest")
+            response = model.generate_content(rerank_prompt)
+
             selected_urls = json.loads(response.text)
+
+            final_df = final_df.set_index("url").loc[
+                [u for u in selected_urls if u in final_df["url"].values]
+            ].reset_index()
+
         except Exception:
-            selected_urls = [c["url"] for c in candidates[:5]]
+            pass  # fallback to rule-based ranking
 
-    # final response
+    # Final response
     final_results = []
-    for url in selected_urls:
-        row = df[df["url"] == url].iloc[0]
-        duration_value = row["duration"]
 
-        if pd.isna(duration_value) or str(duration_value).strip().upper() == "N/A" or str(duration_value).strip() == "":
+    for _, row in final_df.iterrows():
+        duration_value = row["duration"]
+        if not duration_value or str(duration_value).strip().upper() == "N/A":
             duration_value = "Variable"
 
         final_results.append({
