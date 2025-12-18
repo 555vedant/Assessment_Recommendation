@@ -1,29 +1,31 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from contextlib import asynccontextmanager
+from threading import Thread
+import time
 
 from recommender.recommend import recommend
 from recommender.state import get_state
 from recommender.debug_utils import log_event
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    log_event("STARTUP", "Preloading models and index...")
-    get_state()
-    log_event("STARTUP", "Preload complete")
-    yield
-    # Shutdown (optional)
-    log_event("SHUTDOWN", "Application shutting down")
-
-
-app = FastAPI(lifespan=lifespan)
-
+app = FastAPI()
 
 class Query(BaseModel):
     query: str
     useLLM: bool = False
+
+
+def background_preload():
+    try:
+        log_event("STARTUP", "Background preload started")
+        get_state()
+        log_event("STARTUP", "Background preload finished")
+    except Exception as e:
+        log_event("STARTUP_ERROR", str(e))
+
+
+@app.on_event("startup")
+def startup_event():
+    Thread(target=background_preload, daemon=True).start()
 
 
 @app.get("/health")
